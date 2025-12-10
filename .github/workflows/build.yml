@@ -46,7 +46,7 @@ jobs:
       - name: Pull QSIPrep Image
         run: |
           # 拉取正确的镜像 - pennlinc/qsiprep:0.24.0
-          # 设置30分钟超时，镜像大约7-8GB
+          # 注意：组织名是 pennlinc (带字母c)，不是 pennline
           timeout 1800 apptainer pull qsiprep-0.24.0.sif docker://pennlinc/qsiprep:0.24.0
           
           # 验证镜像文件
