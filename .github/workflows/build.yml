@@ -45,9 +45,8 @@ jobs:
 
       - name: Pull QSIPrep Image
         run: |
-          # 拉取正确的镜像 - pennlinc/qsiprep:0.24.0
-          timeout 1800 apptainer pull qsiprep-0.24.0.sif docker://pennlinc/qsiprep:0.24.0
-          # 验证镜像文件
+          # 使用华为云镜像站拉取最新版
+          timeout 1800 apptainer pull qsiprep-latest.sif docker://swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/pennlinc/qsiprep:latest
           ls -lh qsiprep-*.sif
           echo "镜像拉取完成！"
 
