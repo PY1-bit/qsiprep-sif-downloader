@@ -10,20 +10,44 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Apptainer
+      - name: Install Apptainer (via script)
         run: |
-          sudo apt update
-          sudo apt install -y wget
-          wget https://github.com/apptainer/apptainer/releases/download/v1.3.4/apptainer_1.3.4_amd64.deb
-          sudo dpkg -i apptainer_1.3.4_amd64.deb
+          # 安装必要的依赖
+          sudo apt-get update && sudo apt-get install -y \
+            wget \
+            build-essential \
+            libseccomp-dev \
+            libglib2.0-dev \
+            squashfs-tools \
+            cryptsetup
+          # 使用官方安装脚本安装Apptainer
+          wget https://github.com/apptainer/apptainer/releases/download/v1.3.4/apptainer-1.3.4.tar.gz
+          tar -xzf apptainer-1.3.4.tar.gz
+          cd apptainer-1.3.4
+          ./mconfig
+          make -C builddir
+          sudo make -C builddir install
+          # 验证安装
+          apptainer --version
 
-      - name: Pull QSIPrep
+      - name: Set Environment for Large Build
         run: |
-          apptainer pull qsiprep-0.21.0.sif docker://pennbbl/qsiprep:0.21.0
-          ls -lh qsiprep-0.21.0.sif
+          # 设置临时目录到空间更大的位置
+          export APPTAINER_TMPDIR=$RUNNER_TEMP/apptainer_tmp
+          export APPTAINER_CACHEDIR=$RUNNER_TEMP/apptainer_cache
+          mkdir -p $APPTAINER_TMPDIR $APPTAINER_CACHEDIR
+          echo "临时目录设置为: $APPTAINER_TMPDIR"
+
+      - name: Pull QSIPrep with Retry
+        # 使用timeout和重试机制应对网络波动
+        run: |
+          timeout 1800 apptainer pull qsiprep-0.21.0.sif docker://pennbbl/qsiprep:0.21.0 || \
+          (sleep 60 && timeout 1800 apptainer pull qsiprep-0.21.0.sif docker://pennbbl/qsiprep:0.21.0)
+        # 上面命令含义：首次尝试最多30分钟，若失败则等待1分钟后重试
 
       - name: Upload to Artifact
         uses: actions/upload-artifact@v4
         with:
           name: qsiprep-0.21.0.sif
           path: qsiprep-0.21.0.sif
+          retention-days: 7
