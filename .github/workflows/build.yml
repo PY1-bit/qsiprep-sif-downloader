@@ -10,44 +10,52 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Apptainer (via script)
+      - name: Install Apptainer Dependencies
         run: |
-          # 安装必要的依赖
           sudo apt-get update && sudo apt-get install -y \
             wget \
             build-essential \
             libseccomp-dev \
             libglib2.0-dev \
             squashfs-tools \
-            cryptsetup
-          # 使用官方安装脚本安装Apptainer
+            cryptsetup \
+            pkg-config
+
+      - name: Install Apptainer from Source
+        run: |
+          # 下载并编译安装 Apptainer 1.3.4
           wget https://github.com/apptainer/apptainer/releases/download/v1.3.4/apptainer-1.3.4.tar.gz
           tar -xzf apptainer-1.3.4.tar.gz
           cd apptainer-1.3.4
-          ./mconfig
+          ./mconfig --prefix=/usr/local
           make -C builddir
           sudo make -C builddir install
           # 验证安装
           apptainer --version
 
-      - name: Set Environment for Large Build
+      - name: Setup Build Environment
         run: |
-          # 设置临时目录到空间更大的位置
+          # 设置临时目录到 Runner 的临时空间，确保有足够容量
           export APPTAINER_TMPDIR=$RUNNER_TEMP/apptainer_tmp
           export APPTAINER_CACHEDIR=$RUNNER_TEMP/apptainer_cache
           mkdir -p $APPTAINER_TMPDIR $APPTAINER_CACHEDIR
-          echo "临时目录设置为: $APPTAINER_TMPDIR"
+          echo "临时目录: $APPTAINER_TMPDIR"
+          # 配置镜像加速（使用腾讯云镜像源）
+          echo 'export APPTAINER_DOCKER_HUB_MIRROR="https://mirror.ccs.tencentyun.com"' >> $GITHUB_ENV
 
-      - name: Pull QSIPrep with Retry
-        # 使用timeout和重试机制应对网络波动
+      - name: Pull QSIPrep Image
         run: |
-          timeout 1800 apptainer pull qsiprep-0.21.0.sif docker://pennbbl/qsiprep:0.21.0 || \
-          (sleep 60 && timeout 1800 apptainer pull qsiprep-0.21.0.sif docker://pennbbl/qsiprep:0.21.0)
-        # 上面命令含义：首次尝试最多30分钟，若失败则等待1分钟后重试
+          # 拉取正确的镜像 - pennlinc/qsiprep:0.24.0
+          # 设置30分钟超时，镜像大约7-8GB
+          timeout 1800 apptainer pull qsiprep-0.24.0.sif docker://pennlinc/qsiprep:0.24.0
+          
+          # 验证镜像文件
+          ls -lh qsiprep-*.sif
+          echo "镜像拉取完成！"
 
-      - name: Upload to Artifact
+      - name: Upload as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: qsiprep-0.21.0.sif
-          path: qsiprep-0.21.0.sif
+          name: qsiprep-0.24.0-sif
+          path: qsiprep-0.24.0.sif
           retention-days: 7
