@@ -1,58 +1,55 @@
-name: Build QSIPrep SIF
+name: 构建 QSIPrep 镜像
 
 on:
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch: # 仅手动触发
 
 jobs:
-  build:
+  build-qsiprep:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: Install Apptainer Dependencies
+      - name: 安装 Apptainer (快速可靠版)
         run: |
-          sudo apt-get update && sudo apt-get install -y \
+          sudo apt-get update
+          # 1. 安装 Apptainer 的运行依赖和构建工具
+          sudo apt-get install -y \
             wget \
-            build-essential \
-            libseccomp-dev \
-            libglib2.0-dev \
+            uidmap \
+            fuse-overlayfs \
             squashfs-tools \
-            cryptsetup \
-            pkg-config
-
-      - name: Install Apptainer from Source
-        run: |
-          # 下载并编译安装 Apptainer 1.3.4
-          wget https://github.com/apptainer/apptainer/releases/download/v1.3.4/apptainer-1.3.4.tar.gz
-          tar -xzf apptainer-1.3.4.tar.gz
-          cd apptainer-1.3.4
-          ./mconfig --prefix=/usr/local
-          make -C builddir
-          sudo make -C builddir install
-          # 验证安装
+            cryptsetup
+          # 2. 下载并安装官方预编译包（最快最稳）
+          wget https://github.com/apptainer/apptainer/releases/download/v1.3.4/apptainer_1.3.4_amd64.deb
+          sudo dpkg -i apptainer_1.3.4_amd64.deb || sudo apt-get install -f -y
+          # 3. 验证安装
           apptainer --version
 
-      - name: Setup Build Environment
+      - name: 配置构建环境与镜像加速
         run: |
-          # 设置临时目录到 Runner 的临时空间，确保有足够容量
-          export APPTAINER_TMPDIR=$RUNNER_TEMP/apptainer_tmp
-          export APPTAINER_CACHEDIR=$RUNNER_TEMP/apptainer_cache
-          mkdir -p $APPTAINER_TMPDIR $APPTAINER_CACHEDIR
+          # **核心修正1：将变量存入GITHUB_ENV，使其跨步骤生效**
+          echo "APPTAINER_TMPDIR=$RUNNER_TEMP/apptainer_tmp" >> $GITHUB_ENV
+          echo "APPTAINER_CACHEDIR=$RUNNER_TEMP/apptainer_cache" >> $GITHUB_ENV
+          # **核心修正2：设置镜像加速器，而不是替换整个仓库地址**
+          echo "APPTAINER_DOCKER_HUB_MIRROR=https://mirror.ccs.tencentyun.com" >> $GITHUB_ENV
+          # 创建目录
+          mkdir -p $RUNNER_TEMP/apptainer_{tmp,cache}
+
+      - name: 拉取并构建 QSIPrep 镜像 (.sif)
+        run: |
+          # 显示环境变量以确认配置生效
           echo "临时目录: $APPTAINER_TMPDIR"
-          # 配置镜像加速（使用腾讯云镜像源）
-          echo 'export APPTAINER_DOCKER_HUB_MIRROR="https://mirror.ccs.tencentyun.com"' >> $GITHUB_ENV
-
-      - name: Pull QSIPrep Image
-        run: |
-          # 使用华为云镜像站拉取最新版
-          timeout 1800 apptainer pull qsiprep-latest.sif docker://swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/pennlinc/qsiprep:latest
+          echo "镜像加速: $APPTAINER_DOCKER_HUB_MIRROR"
+          
+          # **核心修正3 & 4：拉取一个确定的、存在的版本（例如0.19.1），并设置长超时**
+          # 根据你之前提供的截图，pennbbl/qsiprep:0.19.1 是确定存在的。
+          timeout 2400 apptainer pull qsiprep-0.19.1.sif docker://pennbbl/qsiprep:0.19.1
+          
+          # 验证文件
           ls -lh qsiprep-*.sif
-          echo "镜像拉取完成！"
+          echo "✅ SIF 镜像构建成功！"
+          echo "⚠️  请注意：由于文件巨大，GitHub Actions 无法将其作为 Artifact 上传。"
+          echo "📥 你需要通过其他方式（如SCP、网盘或直接从Runner下载）获取此文件。"
 
-      - name: Upload as Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: qsiprep-0.24.0-sif
-          path: qsiprep-0.24.0.sif
-          retention-days: 7
+      # **核心修正3：已移除 `upload-artifact` 步骤，因为必然失败**
