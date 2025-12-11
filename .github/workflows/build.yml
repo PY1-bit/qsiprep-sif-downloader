@@ -7,7 +7,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      QSIPREP_VERSION:"1.0.2"
+      QSIPREP_VERSION: "1.0.2"   
 
     steps:
       - name: Checkout
@@ -23,7 +23,7 @@ jobs:
       - name: Install Apptainer
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget uidmap fuse-overlayfs
+          sudo apt-get install -y wget uidmap fuse-overlayfs squashfs-tools
           wget https://github.com/apptainer/apptainer/releases/download/v1.3.4/apptainer_1.3.4_amd64.deb
           sudo dpkg -i apptainer_1.3.4_amd64.deb || sudo apt-get -f install -y
           apptainer --version
@@ -34,7 +34,7 @@ jobs:
           export APPTAINER_CACHEDIR=${{ runner.temp }}/apptainer_cache
           mkdir -p "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
 
-          timeout 2400 apptainer pull \
+          timeout 3600 apptainer pull \
             qsiprep-${{ env.QSIPREP_VERSION }}.sif \
             docker://pennlinc/qsiprep:${{ env.QSIPREP_VERSION }}
 
