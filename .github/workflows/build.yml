@@ -1,64 +1,77 @@
 name: 构建 QSIPrep 镜像
 
 on:
-  workflow_dispatch: # 仅手动触发
+  workflow_dispatch:
 
 jobs:
   build-qsiprep:
     runs-on: ubuntu-latest
+    # 定义全局环境变量，所有步骤共享（避免单步骤export丢失）
+    env:
+      QSIPREP_VERSION: "0.19.1"
+      APPTAINER_TMPDIR: ${{ runner.temp }}/apptainer_tmp
+      APPTAINER_CACHEDIR: ${{ runner.temp }}/apptainer_cache
+      SINGULARITY_TMPDIR: ${{ runner.temp }}/apptainer_tmp  # 兼容旧前缀
+      SINGULARITY_CACHEDIR: ${{ runner.temp }}/apptainer_cache
+
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 安装 Apptainer (快速可靠版)
+      - name: 清理磁盘空间（释放≥10GB）
+        run: |
+          # 卸载无用包+清理缓存
+          sudo apt-get autoremove -y --purge
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/* /usr/share/doc /usr/share/man
+          # 查看磁盘使用情况（调试用）
+          df -h
+          # 扩容临时目录（可选，确保空间充足）
+          sudo fallocate -l 12G /mnt/apptainer_tmp
+          sudo mkfs.ext4 /mnt/apptainer_tmp
+          sudo mkdir -p $APPTAINER_TMPDIR
+          sudo mount /mnt/apptainer_tmp $APPTAINER_TMPDIR
+          sudo chmod 777 $APPTAINER_TMPDIR
+
+      - name: 安装 Apptainer（补全依赖+容错）
         run: |
           sudo apt-get update
-          # 1. 安装 Apptainer 的运行依赖和构建工具
-          sudo apt-get install -y \
-            wget \
-            uidmap \
-            fuse-overlayfs \
-            squashfs-tools \
-            cryptsetup
-          # 2. 下载并安装官方预编译包（最快最稳）
+          # 安装Apptainer完整依赖（解决dpkg失败问题）
+          sudo apt-get install -y wget uidmap fuse-overlayfs libseccomp-dev squashfs-tools cryptsetup
+          # 下载+安装deb包，自动补依赖
           wget https://github.com/apptainer/apptainer/releases/download/v1.3.4/apptainer_1.3.4_amd64.deb
-          sudo dpkg -i apptainer_1.3.4_amd64.deb || sudo apt-get install -f -y
-          # 3. 验证安装
+          sudo dpkg -i apptainer_1.3.4_amd64.deb || sudo apt-get -f install -y
+          # 验证安装+配置FUSE驱动
           apptainer --version
+          echo "user overlay enable = yes" | sudo tee -a /usr/local/etc/apptainer/apptainer.conf
+          echo "mount program = /usr/bin/fuse-overlayfs" | sudo tee -a /usr/local/etc/apptainer/apptainer.conf
 
-      - name: 配置构建环境与镜像加速
+      - name: 拉取并构建 QSIPrep 镜像（加校验+调试）
         run: |
-          # 核心修改：在工作区创建临时目录，而非 RUNNER_TEMP
-          WORKSPACE_TMP_DIR="$GITHUB_WORKSPACE/apptainer_build"
-          mkdir -p "$WORKSPACE_TMP_DIR"
-          
-          # 将路径设置为环境变量
-          echo "APPTAINER_TMPDIR=$WORKSPACE_TMP_DIR/tmp" >> $GITHUB_ENV
-          echo "APPTAINER_CACHEDIR=$WORKSPACE_TMP_DIR/cache" >> $GITHUB_ENV
-          echo "APPTAINER_DOCKER_HUB_MIRROR=https://mirror.ccs.tencentyun.com" >> $GITHUB_ENV
-          
-          # 创建子目录
-          mkdir -p "$WORKSPACE_TMP_DIR"/{tmp,cache}
-          
-          # 验证：显示工作区和临时目录的可用空间
-          echo "工作区目录: $GITHUB_WORKSPACE"
-          df -h "$GITHUB_WORKSPACE"
-          echo "临时目录已设置为: $WORKSPACE_TMP_DIR"
-
-      - name: 拉取并构建 QSIPrep 镜像 (.sif)
-        run: |
-          # 显示环境变量以确认配置生效
+          # 创建缓存/临时目录
+          mkdir -p "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
+          # 配置镜像加速
+          export APPTAINER_DOCKER_HUB_MIRROR=https://mirror.ccs.tencentyun.com
+          # 打印环境变量（调试用）
           echo "临时目录: $APPTAINER_TMPDIR"
-          echo "镜像加速: $APPTAINER_DOCKER_HUB_MIRROR"
-          
-          # **核心修正3 & 4：拉取一个确定的、存在的版本（例如0.19.1），并设置长超时**
-          # 根据你之前提供的截图，pennbbl/qsiprep:0.19.1 是确定存在的。
-          timeout 2400 apptainer pull qsiprep-0.19.1.sif docker://pennbbl/qsiprep:0.19.1
-          
-          # 验证文件
-          ls -lh qsiprep-*.sif
-          echo "✅ SIF 镜像构建成功！"
-          echo "⚠️  请注意：由于文件巨大，GitHub Actions 无法将其作为 Artifact 上传。"
-          echo "📥 你需要通过其他方式（如SCP、网盘或直接从Runner下载）获取此文件。"
+          echo "缓存目录: $APPTAINER_CACHEDIR"
+          # 拉取镜像（超时40分钟，失败则终止步骤）
+          timeout 2400 apptainer pull qsiprep-${QSIPREP_VERSION}.sif docker://pennbbl/qsiprep:${QSIPREP_VERSION}
+          # 校验拉取结果：文件不存在则报错
+          if [ ! -f "qsiprep-${QSIPREP_VERSION}.sif" ]; then
+            echo "ERROR: 镜像拉取失败，文件不存在！"
+            exit 1
+          fi
+          # 校验镜像版本（确保拉取正确版本）
+          echo "===== 镜像版本信息 ====="
+          apptainer inspect qsiprep-${QSIPREP_VERSION}.sif | grep -i "version"
+          ls -lh qsiprep-${QSIPREP_VERSION}.sif
 
-      # **核心修正3：已移除 `upload-artifact` 步骤，因为必然失败**
+      - name: 上传到 Release（仅成功时执行）
+        if: success()  # 仅上一步成功才执行
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: qsiprep-${{ env.QSIPREP_VERSION }}-sif
+          name: QSIPrep ${{ env.QSIPREP_VERSION }} SIF
+          files: qsiprep-${{ env.QSIPREP_VERSION }}.sif
+          token: ${{ secrets.GITHUB_TOKEN }}
