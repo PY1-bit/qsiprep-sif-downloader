@@ -32,12 +32,11 @@ jobs:
         run: |
           export APPTAINER_TMPDIR=${{ runner.temp }}/apptainer_tmp
           export APPTAINER_CACHEDIR=${{ runner.temp }}/apptainer_cache
-          export APPTAINER_DOCKER_HUB_MIRROR=https://mirror.ccs.tencentyun.com
           mkdir -p "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
 
           timeout 2400 apptainer pull \
             qsiprep-${{ env.QSIPREP_VERSION }}.sif \
-            docker://swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/pennlinc/qsiprep:${{ env.QSIPREP_VERSION }}
+            docker://pennlinc/qsiprep:${{ env.QSIPREP_VERSION }}
 
           ls -lh qsiprep-${{ env.QSIPREP_VERSION }}.sif
 
