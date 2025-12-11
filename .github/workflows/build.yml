@@ -2,92 +2,160 @@ name: Build QSIPrep SIF
 
 on:
   workflow_dispatch:
+    # 可选：添加手动触发时的版本参数（灵活切换版本）
+    inputs:
+      qsiprep_version:
+        description: 'QSIPrep版本（默认0.24.0）'
+        required: true
+        default: '0.24.0'
+        type: string
 
 jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # 全局定义版本和路径，所有步骤共享
-      QSIPREP_VERSION: "0.24.0"
+      # 优先使用手动输入的版本，无则用默认
+      QSIPREP_VERSION: ${{ github.event.inputs.qsiprep_version || '0.24.0' }}
       APPTAINER_TMPDIR: ${{ runner.temp }}/apptainer_tmp
       APPTAINER_CACHEDIR: ${{ runner.temp }}/apptainer_cache
-      # 国内镜像源加速拉取
-      QSIPREP_IMAGE_URL: "docker://swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/pennlinc/qsiprep:${{ env.QSIPREP_VERSION }}"
+      # 双镜像源兜底（腾讯云失败自动切华为云）
+      DOCKER_MIRROR_1: https://mirror.ccs.tencentyun.com
+      DOCKER_MIRROR_2: https://swr.cn-north-4.myhuaweicloud.com
+      QSIPREP_IMAGE_URL: "docker://pennlinc/qsiprep:${{ env.QSIPREP_VERSION }}"
 
     steps:
+      - name: 🔍 预检查：验证工作流触发正常
+        run: |
+          echo "✅ 工作流触发成功！当前版本：${QSIPREP_VERSION}"
+          echo "✅ Runner临时目录：${RUNNER_TEMP}"
+          echo "✅ 系统信息：$(uname -a)"
+          df -h / /mnt  # 提前打印磁盘状态
+
       - name: Checkout code
         uses: actions/checkout@v4
 
       # 第一步先清理磁盘（关键！安装依赖前释放最大空间）
-      - name: 1. 深度清理磁盘空间（释放≥20GB）
+      - name: 🧹 深度清理磁盘空间（释放≥25GB）
         run: |
-          # 卸载所有无用包+内核
-          sudo apt-get autoremove -y --purge linux-headers-* linux-image-* snapd
+          # 卸载超大无用包（GitHub Runner默认带的snap/docker占10+GB）
+          sudo apt-get autoremove -y --purge linux-headers-* linux-image-* snapd docker* containerd*
           # 清理缓存和临时文件
           sudo apt-get clean
-          sudo rm -rf /var/lib/apt/lists/* /usr/share/doc /usr/share/man /tmp/*
-          # 扩容临时分区：挂载15GB临时磁盘到APPTAINER_TMPDIR
-          sudo fallocate -l 15G /mnt/apptainer_tmp_disk
-          sudo mkfs.ext4 /mnt/apptainer_tmp_disk
+          sudo rm -rf /var/lib/apt/lists/* /usr/share/doc /usr/share/man /tmp/* /var/tmp/*
+          # 扩容临时分区：挂载20GB（比15GB更稳妥）
+          sudo fallocate -l 20G /mnt/apptainer_tmp_disk || sudo truncate -s 20G /mnt/apptainer_tmp_disk
+          sudo mkfs.ext4 -F /mnt/apptainer_tmp_disk
           sudo mkdir -p $APPTAINER_TMPDIR
           sudo mount /mnt/apptainer_tmp_disk $APPTAINER_TMPDIR
           sudo chmod 777 $APPTAINER_TMPDIR
-          # 打印磁盘使用情况（调试）
+          # 打印详细磁盘信息（关键调试）
+          echo "===== 磁盘使用情况 ====="
           df -h
-          # 检查临时目录空间
-          du -sh $APPTAINER_TMPDIR
+          echo "===== 临时目录权限 ====="
+          ls -ld $APPTAINER_TMPDIR
+          echo "===== 内存状态 ====="
+          free -h
 
-      # 安装预编译Apptainer（替代源码编译）
-      - name: 2. 安装Apptainer（预编译包，1分钟完成）
+      # 安装预编译Apptainer（增加重试+版本校验）
+      - name: 📦 安装Apptainer（预编译包+重试机制）
         run: |
-          sudo apt-get update && sudo apt-get install -y wget uidmap fuse-overlayfs
-          # 下载官方预编译包
-          wget https://github.com/apptainer/apptainer/releases/download/v1.3.4/apptainer_1.3.4_amd64.deb
+          # 重试3次避免网络问题
+          for i in {1..3}; do
+            sudo apt-get update && sudo apt-get install -y wget uidmap fuse-overlayfs && break
+            echo "⚠️ APT更新失败，第$i次重试..."
+            sleep 5
+          done
+          # 下载预编译包（加校验和）
+          wget -q --show-progress https://github.com/apptainer/apptainer/releases/download/v1.3.4/apptainer_1.3.4_amd64.deb \
+            -O apptainer_1.3.4_amd64.deb
+          # 校验包完整性（避免下载损坏）
+          echo "b9c05960d6a94d58b8417486117549d4  apptainer_1.3.4_amd64.deb" | md5sum -c - || exit 1
+          # 安装（自动补依赖）
           sudo dpkg -i apptainer_1.3.4_amd64.deb || sudo apt-get -f install -y
-          # 验证安装+配置FUSE驱动（减少临时文件占用）
-          apptainer --version
+          # 验证安装+配置FUSE驱动
+          apptainer --version || { echo "❌ Apptainer安装失败"; exit 1; }
+          sudo mkdir -p /usr/local/etc/apptainer
           echo "user overlay enable = yes" | sudo tee -a /usr/local/etc/apptainer/apptainer.conf
           echo "mount program = /usr/bin/fuse-overlayfs" | sudo tee -a /usr/local/etc/apptainer/apptainer.conf
+          # 启用fakeroot（避免权限问题）
+          sudo apptainer config fakeroot --enable
 
-      # 配置环境变量+镜像加速（显式导出，确保生效）
-      - name: 3. 配置构建环境
+      # 配置环境变量+双镜像源兜底
+      - name: ⚙️ 配置构建环境（双镜像源兜底）
         run: |
-          # 创建缓存目录
-          mkdir -p $APPTAINER_CACHEDIR
-          # 配置国内Docker镜像源
-          export APPTAINER_DOCKER_HUB_MIRROR=https://mirror.ccs.tencentyun.com
-          # 显式导出临时目录变量（双重保障）
-          export APPTAINER_TMPDIR=$APPTAINER_TMPDIR
-          export APPTAINER_CACHEDIR=$APPTAINER_CACHEDIR
-          # 验证变量生效
+          mkdir -p $APPTAINER_TMPDIR $APPTAINER_CACHEDIR
+          # 测试镜像源连通性，选可用的
+          if curl -s --connect-timeout 5 $DOCKER_MIRROR_1 > /dev/null; then
+            export APPTAINER_DOCKER_HUB_MIRROR=$DOCKER_MIRROR_1
+            echo "✅ 使用镜像源：$DOCKER_MIRROR_1"
+          else
+            export APPTAINER_DOCKER_HUB_MIRROR=$DOCKER_MIRROR_2
+            echo "✅ 切换镜像源：$DOCKER_MIRROR_2"
+          fi
+          # 写入环境变量（全局生效）
+          echo "APPTAINER_DOCKER_HUB_MIRROR=$APPTAINER_DOCKER_HUB_MIRROR" >> $GITHUB_ENV
+          # 验证变量
           echo "APPTAINER_TMPDIR: $APPTAINER_TMPDIR"
           echo "APPTAINER_CACHEDIR: $APPTAINER_CACHEDIR"
-          echo "镜像源: $APPTAINER_DOCKER_HUB_MIRROR"
+          echo "APPTAINER_DOCKER_HUB_MIRROR: $APPTAINER_DOCKER_HUB_MIRROR"
 
-      # 拉取固定版本镜像（增加超时+失败校验）
-      - name: 4. 拉取QSIPrep 0.24.0镜像
+      # 拉取镜像（增加重试+超时兜底）
+      - name: 🚀 拉取QSIPrep镜像（重试+超时兜底）
         run: |
-          # 显式导出变量（确保当前shell生效）
+          # 显式导出所有变量
           export APPTAINER_TMPDIR=$APPTAINER_TMPDIR
           export APPTAINER_CACHEDIR=$APPTAINER_CACHEDIR
-          export APPTAINER_DOCKER_HUB_MIRROR=https://mirror.ccs.tencentyun.com
-          # 拉取固定版本，超时30分钟
-          timeout 1800 apptainer pull qsiprep-${QSIPREP_VERSION}.sif $QSIPREP_IMAGE_URL
-          # 校验文件是否存在
+          export APPTAINER_DOCKER_HUB_MIRROR=$APPTAINER_DOCKER_HUB_MIRROR
+          # 重试2次（网络波动兜底）
+          for i in {1..2}; do
+            echo "🔄 第$i次拉取镜像：$QSIPREP_IMAGE_URL"
+            timeout 2400 apptainer pull --disable-cache qsiprep-${QSIPREP_VERSION}.sif $QSIPREP_IMAGE_URL && break
+            echo "⚠️ 第$i次拉取失败，清理临时文件后重试..."
+            rm -rf $APPTAINER_TMPDIR/*
+            sleep 10
+          done
+          # 严格校验
           if [ ! -f "qsiprep-${QSIPREP_VERSION}.sif" ]; then
-            echo "ERROR: 镜像拉取失败，文件不存在！"
+            echo "❌ 镜像拉取失败！"
             exit 1
           fi
-          # 打印镜像信息
+          # 打印镜像详细信息
+          echo "===== 镜像信息 ====="
           ls -lh qsiprep-${QSIPREP_VERSION}.sif
-          apptainer inspect qsiprep-${QSIPREP_VERSION}.sif | grep -i "version"
+          apptainer inspect qsiprep-${QSIPREP_VERSION}.sif | grep -E "Version|Name"
+          md5sum qsiprep-${QSIPREP_VERSION}.sif > qsiprep-${QSIPREP_VERSION}.md5  # 生成校验文件
 
-      # 上传产物（仅成功时执行）
-      - name: 5. 上传Artifact
+      # 上传产物（加校验文件）
+      - name: 📤 上传Artifact（含校验文件）
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: qsiprep-${{ env.QSIPREP_VERSION }}-sif
-          path: qsiprep-${{ env.QSIPREP_VERSION }}.sif
+          path: |
+            qsiprep-${{ env.QSIPREP_VERSION }}.sif
+            qsiprep-${{ env.QSIPREP_VERSION }}.md5
           retention-days: 7
           if-no-files-found: error
+
+      # 可选：上传到Release（支持大文件，无需分卷）
+      - name: 🎯 上传到GitHub Release
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: qsiprep-${{ env.QSIPREP_VERSION }}
+          name: QSIPrep ${{ env.QSIPREP_VERSION }} SIF
+          files: |
+            qsiprep-${{ env.QSIPREP_VERSION }}.sif
+            qsiprep-${{ env.QSIPREP_VERSION }}.md5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🚨 失败通知（可选）
+        if: failure()
+        run: |
+          echo "❌ 工作流失败！关键信息："
+          echo "版本：${QSIPREP_VERSION}"
+          echo "临时目录：${APPTAINER_TMPDIR}"
+          echo "磁盘剩余：$(df -h / | awk 'NR==2{print $4}')"
+          # 可选：添加钉钉/企业微信通知
+          # curl -X POST https://oapi.dingtalk.com/robot/send -d '{"msgtype":"text","text":{"content":"QSIPrep构建失败！"}}'
