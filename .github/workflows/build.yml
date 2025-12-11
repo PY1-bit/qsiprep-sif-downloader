@@ -28,13 +28,22 @@ jobs:
 
       - name: 配置构建环境与镜像加速
         run: |
-          # **核心修正1：将变量存入GITHUB_ENV，使其跨步骤生效**
-          echo "APPTAINER_TMPDIR=$RUNNER_TEMP/apptainer_tmp" >> $GITHUB_ENV
-          echo "APPTAINER_CACHEDIR=$RUNNER_TEMP/apptainer_cache" >> $GITHUB_ENV
-          # **核心修正2：设置镜像加速器，而不是替换整个仓库地址**
+          # 核心修改：在工作区创建临时目录，而非 RUNNER_TEMP
+          WORKSPACE_TMP_DIR="$GITHUB_WORKSPACE/apptainer_build"
+          mkdir -p "$WORKSPACE_TMP_DIR"
+          
+          # 将路径设置为环境变量
+          echo "APPTAINER_TMPDIR=$WORKSPACE_TMP_DIR/tmp" >> $GITHUB_ENV
+          echo "APPTAINER_CACHEDIR=$WORKSPACE_TMP_DIR/cache" >> $GITHUB_ENV
           echo "APPTAINER_DOCKER_HUB_MIRROR=https://mirror.ccs.tencentyun.com" >> $GITHUB_ENV
-          # 创建目录
-          mkdir -p $RUNNER_TEMP/apptainer_{tmp,cache}
+          
+          # 创建子目录
+          mkdir -p "$WORKSPACE_TMP_DIR"/{tmp,cache}
+          
+          # 验证：显示工作区和临时目录的可用空间
+          echo "工作区目录: $GITHUB_WORKSPACE"
+          df -h "$GITHUB_WORKSPACE"
+          echo "临时目录已设置为: $WORKSPACE_TMP_DIR"
 
       - name: 拉取并构建 QSIPrep 镜像 (.sif)
         run: |
