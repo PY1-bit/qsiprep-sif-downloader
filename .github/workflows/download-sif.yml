@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'QSIPrep 版本号（对应 Release 附件）'
+        description: 'QSIPrep 版本号（目前仅 0.16.0 验证带 .sif）'
         required: true
-        default: '0.19.1'   # 目前 Release 里带 .sif 的最新版
+        default: '0.16.0'
 
 jobs:
   download:
