@@ -23,10 +23,10 @@ jobs:
                       /tmp/* /var/tmp/*
           df -h
 
-      # ---------- 2. 挂载 30 GB 临时盘 ----------
-      - name: 挂载 30 GB 临时磁盘
+      # ---------- 2. 挂载 50 GB 临时盘 ----------
+      - name: 挂载 50 GB 临时磁盘
         run: |
-          sudo fallocate -l 30G /mnt/extra.img
+          sudo fallocate -l 50G /mnt/extra.img
           sudo mkfs.ext4 /mnt/extra.img
           sudo mkdir -p /mnt/extra
           sudo mount /mnt/extra.img /mnt/extra
@@ -42,11 +42,11 @@ jobs:
           wget https://github.com/apptainer/apptainer/releases/download/v1.3.4/apptainer_1.3.4_amd64.deb
           sudo dpkg -i apptainer_1.3.4_amd64.deb || sudo apt-get -f install -y
 
-      # ---------- 4. 构建 SIF（带缓存上限） ----------
+      # ---------- 4. 构建 SIF ----------
       - name: 构建 SIF
         run: |
           mkdir -p "$APPTAINER_CACHEDIR"
-          # 限制缓存大小：超过 5 GB 自动清理
+          # 限制并发缓存 & 强制清理
           export APPTAINER_CLEAN_INTERVAL=5
           timeout 3600 apptainer pull \
             --force \
