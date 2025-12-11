@@ -23,10 +23,10 @@ jobs:
                       /tmp/* /var/tmp/*
           df -h
 
-      # ---------- 2. 挂载 50 GB 临时盘 ----------
-      - name: 挂载 50 GB 临时磁盘
+      # ---------- 2. 挂载 70 GB 临时盘 ----------
+      - name: 挂载 70 GB 临时磁盘
         run: |
-          sudo fallocate -l 50G /mnt/extra.img
+          sudo fallocate -l 70G /mnt/extra.img
           sudo mkfs.ext4 /mnt/extra.img
           sudo mkdir -p /mnt/extra
           sudo mount /mnt/extra.img /mnt/extra
@@ -46,7 +46,6 @@ jobs:
       - name: 构建 SIF
         run: |
           mkdir -p "$APPTAINER_CACHEDIR"
-          # 限制并发缓存 & 强制清理
           export APPTAINER_CLEAN_INTERVAL=5
           timeout 3600 apptainer pull \
             --force \
