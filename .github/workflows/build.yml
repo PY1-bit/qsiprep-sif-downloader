@@ -10,31 +10,8 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest-4-cores   # ✅ 150 GB 磁盘，公开仓库免费
     steps:
-      # ---------- 1. 极限清盘 ----------
-      - name: 极限清理系统盘
-        run: |
-          sudo apt-get autoremove -y --purge
-          sudo apt-get clean
-          sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache \
-                      /usr/local/share/boost /usr/local/lib/android \
-                      /var/lib/apt/lists/* /usr/share/doc /usr/share/man \
-                      /tmp/* /var/tmp/*
-          df -h
-
-      # ---------- 2. 挂载 70 GB 临时盘 ----------
-      - name: 挂载 70 GB 临时磁盘
-        run: |
-          sudo fallocate -l 70G /mnt/extra.img
-          sudo mkfs.ext4 /mnt/extra.img
-          sudo mkdir -p /mnt/extra
-          sudo mount /mnt/extra.img /mnt/extra
-          sudo chmod 777 /mnt/extra
-          echo "APPTAINER_TMPDIR=/mnt/extra" >> $GITHUB_ENV
-          echo "APPTAINER_CACHEDIR=/mnt/extra/cache" >> $GITHUB_ENV
-
-      # ---------- 3. 安装 Apptainer ----------
       - name: 安装 Apptainer
         run: |
           sudo apt-get update
@@ -42,18 +19,11 @@ jobs:
           wget https://github.com/apptainer/apptainer/releases/download/v1.3.4/apptainer_1.3.4_amd64.deb
           sudo dpkg -i apptainer_1.3.4_amd64.deb || sudo apt-get -f install -y
 
-      # ---------- 4. 构建 SIF ----------
       - name: 构建 SIF
         run: |
-          mkdir -p "$APPTAINER_CACHEDIR"
-          export APPTAINER_CLEAN_INTERVAL=5
-          timeout 3600 apptainer pull \
-            --force \
-            qsiprep-${{ github.event.inputs.version }}.sif \
-            docker://pennlinc/qsiprep:${{ github.event.inputs.version }}
+          timeout 3600 apptainer pull qsiprep-${{ github.event.inputs.version }}.sif docker://pennlinc/qsiprep:${{ github.event.inputs.version }}
           ls -lh qsiprep-${{ github.event.inputs.version }}.sif
 
-      # ---------- 5. 上传到 Release ----------
       - name: 上传到 Release
         uses: softprops/action-gh-release@v2
         with:
